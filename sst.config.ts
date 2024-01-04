@@ -4,27 +4,53 @@ import { STAGE } from "./src/constants"
 
 const NAME = "manager"
 
+const DOMAIN = [STAGE === "prod" ? undefined : STAGE, "manager.aws.lshay.land"]
+	.filter(Boolean)
+	.join(".")
+
 export default $config({
 	app(input) {
 		return {
 			name: NAME,
+			providers: {
+				aws: {
+					region: "us-west-2",
+				},
+			},
 			removalPolicy: input?.stage === "production" ? "retain" : "remove",
 		}
 	},
 	async run() {
-		const pool = new aws.cognito.UserPool("Pool", {}, {})
-		const userpoolClient = new aws.cognito.UserPoolClient(
-			"UserPoolClient",
-			{
-				allowedOauthFlows: ["code", "implicit"],
-				allowedOauthFlowsUserPoolClient: true,
-				allowedOauthScopes: ["email", "openid"],
-				callbackUrls: ["http://localhost:3000/auth/callback/cognito"],
-				supportedIdentityProviders: ["COGNITO"],
-				userPoolId: pool.id,
-			},
-			{},
-		)
+		const pool = new aws.cognito.UserPool("Pool")
+		const userPoolDomain = new aws.cognito.UserPoolDomain("UserPoolDomain", {
+			domain: `${STAGE}-manager`,
+			userPoolId: pool.id,
+		})
+
+		const userPoolClient = new aws.cognito.UserPoolClient("UserPoolClient", {
+			allowedOauthFlows: ["code"],
+			allowedOauthFlowsUserPoolClient: true,
+			allowedOauthScopes: ["email", "openid", "profile"],
+			callbackUrls: [
+				"https://d1eks578ui5wez.cloudfront.net",
+				"http://localhost:3000/auth/callback/cognito",
+			],
+			generateSecret: true,
+			supportedIdentityProviders: ["COGNITO"],
+			userPoolId: pool.id,
+		})
+
+		let userPoolClientSecret = ""
+
+		try {
+			const secretVersion = await aws.secretsmanager.getSecretVersion({
+				secretId: `/${STAGE}/manager/cognito/client-secret`,
+			})
+
+			userPoolClientSecret = secretVersion.secretString
+		} catch (error) {
+			console.error(error)
+		}
 
 		const table = new aws.dynamodb.Table("WebData", {
 			attributes: [
@@ -80,15 +106,24 @@ export default $config({
 		})
 
 		const environment = {
-			COGNITO_CLIENT_ID: userpoolClient.id,
-			COGNITO_CLIENT_SECRET: userpoolClient.clientSecret,
-			COGNITO_ISSUER: util.interpolate`https://cognito-idp.us-west-2.amazonaws.com/${pool.id}`,
+			COGNITO_CLIENT_ID: userPoolClient.id,
+			COGNITO_CLIENT_SECRET: userPoolClientSecret,
+			COGNITO_ISSUER: util.interpolate`https://${
+				userPoolDomain.domain
+			}.auth.${pool.id.apply(
+				(value) => value.split("_")[0],
+			)}.amazoncognito.com/oauth2`,
 			STAGE,
 			WEB_DATA_TABLE_NAME: table.name,
 		}
 
 		const site = new sst.Nextjs("Web", {
 			buildCommand: "bun run build:open-next",
+			/*domain: {
+				domainName: DOMAIN,
+				hostedZone: "aws.lshay.land",
+				redirects: [`www.${DOMAIN}`],
+			},*/
 			environment,
 		})
 
@@ -119,11 +154,17 @@ export default $config({
 			})
 		}
 
-		new aws.ssm.Parameter("Environment", {
-			dataType: "text",
-			name: `/${STAGE}/manager/environment`,
-			type: "String",
-			value: util.jsonStringify(environment),
-		})
+		new aws.ssm.Parameter(
+			"Environment",
+			{
+				dataType: "text",
+				name: `/${STAGE}/manager/environment`,
+				type: "String",
+				value: util.jsonStringify(environment),
+			},
+			{
+				dependsOn: [userPoolClient],
+			},
+		)
 	},
 })
