@@ -11,6 +11,7 @@ const handler = NextAuth({
 			issuer: serverEnvironment.COGNITO_ISSUER,
 		}),
 	],
+	secret: serverEnvironment.NEXTAUTH_SECRET,
 })
 
 export { handler as GET, handler as POST }

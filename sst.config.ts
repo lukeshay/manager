@@ -21,36 +21,45 @@ export default $config({
 		}
 	},
 	async run() {
-		const pool = new aws.cognito.UserPool("Pool")
-		const userPoolDomain = new aws.cognito.UserPoolDomain("UserPoolDomain", {
-			domain: `${STAGE}-manager`,
+		const preSignUpFunction = new sst.Function("PreSignUp", {
+			bundle: "src/handlers/cognito",
+			handler: "pre-sign-up.handler",
+			runtime: "nodejs18.x",
+		})
+
+		const pool = new aws.cognito.UserPool("Pool", {
+			autoVerifiedAttributes: ["email"],
+			lambdaConfig: {
+				preSignUp: preSignUpFunction.nodes.function.arn,
+			},
+			userPoolAddOns: {
+				advancedSecurityMode: "ENFORCED",
+			},
+			usernameAttributes: ["email"],
+		})
+		new aws.cognito.UserPoolDomain("UserPoolDomain", {
+			domain: `${STAGE}-manager2`,
 			userPoolId: pool.id,
 		})
 
 		const userPoolClient = new aws.cognito.UserPoolClient("UserPoolClient", {
-			allowedOauthFlows: ["code"],
+			allowedOauthFlows: ["code", "implicit"],
 			allowedOauthFlowsUserPoolClient: true,
 			allowedOauthScopes: ["email", "openid", "profile"],
 			callbackUrls: [
-				"https://d1eks578ui5wez.cloudfront.net",
-				"http://localhost:3000/auth/callback/cognito",
+				`https://${DOMAIN}/api/auth/callback/cognito`,
+				"http://localhost:3000/api/auth/callback/cognito",
+			],
+			enableTokenRevocation: true,
+			explicitAuthFlows: [
+				"ALLOW_USER_PASSWORD_AUTH",
+				"ALLOW_USER_SRP_AUTH",
+				"ALLOW_REFRESH_TOKEN_AUTH",
 			],
 			generateSecret: true,
 			supportedIdentityProviders: ["COGNITO"],
 			userPoolId: pool.id,
 		})
-
-		let userPoolClientSecret = ""
-
-		try {
-			const secretVersion = await aws.secretsmanager.getSecretVersion({
-				secretId: `/${STAGE}/manager/cognito/client-secret`,
-			})
-
-			userPoolClientSecret = secretVersion.secretString
-		} catch (error) {
-			console.error(error)
-		}
 
 		const table = new aws.dynamodb.Table("WebData", {
 			attributes: [
@@ -105,25 +114,37 @@ export default $config({
 			},
 		})
 
+		const NEXTAUTH_SECRET = new sst.Secret("NEXTAUTH_SECRET", "undefined")
+		const COGNITO_CLIENT_SECRET = new sst.Secret(
+			"COGNITO_CLIENT_SECRET",
+			"undefined",
+		)
+		const TURSO_DB_URL = new sst.Secret("TURSO_DB_URL", "undefined")
+		const TURSO_AUTH_TOKEN = new sst.Secret("TURSO_AUTH_TOKEN", "undefined")
+
 		const environment = {
 			COGNITO_CLIENT_ID: userPoolClient.id,
-			COGNITO_CLIENT_SECRET: userPoolClientSecret,
-			COGNITO_ISSUER: util.interpolate`https://${
-				userPoolDomain.domain
-			}.auth.${pool.id.apply(
+			COGNITO_CLIENT_SECRET: COGNITO_CLIENT_SECRET.value.apply(
+				(v) => v ?? "undefined",
+			),
+			COGNITO_ISSUER: $util.interpolate`https://cognito-idp.${pool.id.apply(
 				(value) => value.split("_")[0],
-			)}.amazoncognito.com/oauth2`,
+			)}.amazonaws.com/${pool.id}`,
+			NEXTAUTH_SECRET: NEXTAUTH_SECRET.value.apply((v) => v ?? "undefined"),
+			NEXTAUTH_URL: `https://${DOMAIN}`,
 			STAGE,
+			TURSO_AUTH_TOKEN: TURSO_AUTH_TOKEN.value.apply((v) => v ?? "undefined"),
+			TURSO_DB_URL: TURSO_DB_URL.value.apply((v) => v ?? "undefined"),
 			WEB_DATA_TABLE_NAME: table.name,
 		}
 
-		const site = new sst.Nextjs("Web", {
+		/*const site = new sst.Nextjs("Web", {
 			buildCommand: "bun run build:open-next",
-			/*domain: {
+			domain: {
 				domainName: DOMAIN,
 				hostedZone: "aws.lshay.land",
 				redirects: [`www.${DOMAIN}`],
-			},*/
+			},
 			environment,
 		})
 
@@ -152,15 +173,16 @@ export default $config({
 				},
 				role,
 			})
-		}
+		}*/
 
 		new aws.ssm.Parameter(
 			"Environment",
 			{
 				dataType: "text",
-				name: `/${STAGE}/manager/environment`,
-				type: "String",
-				value: util.jsonStringify(environment),
+				description: "Environment variables for the web app",
+				name: `/manager/${STAGE}/environment`,
+				type: "SecureString",
+				value: $util.jsonStringify(environment),
 			},
 			{
 				dependsOn: [userPoolClient],

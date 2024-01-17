@@ -8,7 +8,8 @@ const client = new SSM()
 export const injectEnvironment = async () => {
 	const parameter = await client.send(
 		new GetParameterCommand({
-			Name: `/${STAGE}/manager/environment`,
+			Name: `/manager/${STAGE}/environment`,
+			WithDecryption: true,
 		}),
 	)
 
@@ -16,7 +17,10 @@ export const injectEnvironment = async () => {
 		return
 	}
 
-	const environment = JSON.parse(parameter.Parameter.Value)
+	// @ts-expect-error - No idea why this is happening
+	const environment = JSON.parse(parameter.Parameter.Value.toString("utf8"))
+
+	environment.NEXTAUTH_URL = `http://localhost:3000`
 
 	const dotenv = Object.entries(environment)
 		.map(([key, value]) => `${key}=${value}`)
