@@ -1,12 +1,6 @@
 /// <reference path="./.sst/src/global.d.ts" />
 
-import { STAGE } from "./src/constants"
-
 const NAME = "manager"
-
-const DOMAIN = [STAGE === "prod" ? undefined : STAGE, "manager.aws.lshay.land"]
-	.filter(Boolean)
-	.join(".")
 
 export default $config({
 	app(input) {
@@ -21,10 +15,23 @@ export default $config({
 		}
 	},
 	async run() {
+		const DOMAIN = [
+			$app.stage === "prod" ? undefined : $app.stage,
+			"manager.aws.lshay.land",
+		]
+			.filter(Boolean)
+			.join(".")
+
+		const parameter = await aws.ssm.getParameter({
+			name: `/manager/${$app.stage}/parameters`,
+			withDecryption: true,
+		})
+
+		const parameters = JSON.parse(parameter.value)
+
 		const preSignUpFunction = new sst.Function("PreSignUp", {
-			bundle: "src/handlers/cognito",
-			handler: "pre-sign-up.handler",
-			runtime: "nodejs18.x",
+			handler: "src/handlers/cognito/pre-sign-up.handler",
+			runtime: "nodejs20.x",
 		})
 
 		const pool = new aws.cognito.UserPool("Pool", {
@@ -37,8 +44,16 @@ export default $config({
 			},
 			usernameAttributes: ["email"],
 		})
+
+		new aws.lambda.Permission("InvokePreSignUpPermission", {
+			action: "lambda:InvokeFunction",
+			function: preSignUpFunction.nodes.function,
+			principal: "cognito-idp.amazonaws.com",
+			sourceArn: pool.arn,
+		})
+
 		new aws.cognito.UserPoolDomain("UserPoolDomain", {
-			domain: `${STAGE}-manager2`,
+			domain: `${$app.stage}-manager`,
 			userPoolId: pool.id,
 		})
 
@@ -61,131 +76,31 @@ export default $config({
 			userPoolId: pool.id,
 		})
 
-		const table = new aws.dynamodb.Table("WebData", {
-			attributes: [
-				{
-					name: "PK",
-					type: "S",
-				},
-				{
-					name: "SK",
-					type: "S",
-				},
-				{
-					name: "GSI1PK",
-					type: "S",
-				},
-				{
-					name: "GSI1SK",
-					type: "S",
-				},
-				{
-					name: "GSI2PK",
-					type: "S",
-				},
-				{
-					name: "GSI2SK",
-					type: "S",
-				},
-			],
-			billingMode: "PAY_PER_REQUEST",
-			globalSecondaryIndexes: [
-				{
-					hashKey: "GSI1PK",
-					name: "GSI1",
-					projectionType: "ALL",
-					rangeKey: "GSI1SK",
-				},
-				{
-					hashKey: "GSI2PK",
-					name: "GSI2",
-					projectionType: "ALL",
-					rangeKey: "GSI2SK",
-				},
-			],
-			hashKey: "PK",
-			pointInTimeRecovery: {
-				enabled: true,
-			},
-			rangeKey: "SK",
-			ttl: {
-				attributeName: "deleteAt",
-				enabled: true,
-			},
-		})
-
-		const NEXTAUTH_SECRET = new sst.Secret("NEXTAUTH_SECRET", "undefined")
-		const COGNITO_CLIENT_SECRET = new sst.Secret(
-			"COGNITO_CLIENT_SECRET",
-			"undefined",
-		)
-		const TURSO_DB_URL = new sst.Secret("TURSO_DB_URL", "undefined")
-		const TURSO_AUTH_TOKEN = new sst.Secret("TURSO_AUTH_TOKEN", "undefined")
-
 		const environment = {
 			COGNITO_CLIENT_ID: userPoolClient.id,
-			COGNITO_CLIENT_SECRET: COGNITO_CLIENT_SECRET.value.apply(
-				(v) => v ?? "undefined",
-			),
 			COGNITO_ISSUER: $util.interpolate`https://cognito-idp.${pool.id.apply(
 				(value) => value.split("_")[0],
 			)}.amazonaws.com/${pool.id}`,
-			NEXTAUTH_SECRET: NEXTAUTH_SECRET.value.apply((v) => v ?? "undefined"),
-			NEXTAUTH_URL: `https://${DOMAIN}`,
-			STAGE,
-			TURSO_AUTH_TOKEN: TURSO_AUTH_TOKEN.value.apply((v) => v ?? "undefined"),
-			TURSO_DB_URL: TURSO_DB_URL.value.apply((v) => v ?? "undefined"),
-			WEB_DATA_TABLE_NAME: table.name,
+			NEXTAUTH_URL: `https://www.${DOMAIN}`,
+			STAGE: $app.stage,
+			...parameters,
 		}
 
-		/*const site = new sst.Nextjs("Web", {
-			buildCommand: "bun run build:open-next",
-			domain: {
-				domainName: DOMAIN,
-				hostedZone: "aws.lshay.land",
-				redirects: [`www.${DOMAIN}`],
-			},
-			environment,
+		const environmentParameter = new aws.ssm.Parameter("Environment", {
+			dataType: "text",
+			description: "Environment variables for the web app",
+			name: `/manager/${$app.stage}/environment`,
+			type: "SecureString",
+			value: $util.jsonStringify(environment),
 		})
 
-		const role = site.nodes?.server?.nodes.role?.id
-
-		if (role) {
-			new aws.iam.RolePolicy("WebDataRolePolicy", {
-				policy: {
-					Statement: [
-						{
-							Action: [
-								"dynamodb:BatchGetItem",
-								"dynamodb:BatchWriteItem",
-								"dynamodb:DeleteItem",
-								"dynamodb:GetItem",
-								"dynamodb:PutItem",
-								"dynamodb:Query",
-								"dynamodb:Scan",
-								"dynamodb:UpdateItem",
-							],
-							Effect: "Allow",
-							Resource: [table.arn, table.arn.apply((arn) => `${arn}/index/*`)],
-						},
-					],
-					Version: "2012-10-17",
-				},
-				role,
-			})
-		}*/
-
-		new aws.ssm.Parameter(
-			"Environment",
+		new sst.Nextjs(
+			"Web",
 			{
-				dataType: "text",
-				description: "Environment variables for the web app",
-				name: `/manager/${STAGE}/environment`,
-				type: "SecureString",
-				value: $util.jsonStringify(environment),
+				buildCommand: `SST_STAGE=${$app.stage} bun run build:open-next`,
 			},
 			{
-				dependsOn: [userPoolClient],
+				dependsOn: [environmentParameter],
 			},
 		)
 	},

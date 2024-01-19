@@ -1,7 +1,13 @@
-import { PreSignUpTriggerHandler } from "aws-lambda"
+import { Callback, Context, PreSignUpTriggerEvent } from "aws-lambda"
 
-export const handler: PreSignUpTriggerHandler = (event, _context, callback) => {
-	if (event.userName !== "shay.luke17@gmail.com") {
-		callback("User not allowed")
+export function handler(
+	event: PreSignUpTriggerEvent,
+	_context: Context,
+	callback: Callback,
+) {
+	if (event.request.userAttributes.email === "shay.luke17@gmail.com") {
+		callback(null, event)
+	} else {
+		callback("User not allowed", event)
 	}
 }

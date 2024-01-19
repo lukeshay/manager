@@ -8,7 +8,7 @@ import { argv } from "node:process"
 import { STAGE } from "../src/constants"
 
 const ssm = new SSM()
-const name = `/manager/${STAGE}/environment`
+const name = `/manager/${STAGE}/parameters`
 
 export const injectEnvironment = async () => {
 	let parameters: Record<string, string> = {}

@@ -1,18 +1,12 @@
-import { Button, buttonVariants } from "@lshay/ui/components/new-york/button"
+import { buttonVariants } from "@lshay/ui/components/new-york/button"
 import { PersonIcon } from "@radix-ui/react-icons"
 import Link from "next/link"
 import { getServerSession } from "next-auth/next"
-import { signIn } from "next-auth/react"
-import { ReactNode, use } from "react"
+import { use } from "react"
 
 import { ThemeToggle } from "./theme-toggle"
 
-export type NavbarProperties = {
-	left?: ReactNode
-	right?: ReactNode
-}
-
-export function Navbar({ left, right }: NavbarProperties) {
+export function Navbar() {
 	const session = use(getServerSession())
 
 	return (
@@ -27,6 +21,7 @@ export function Navbar({ left, right }: NavbarProperties) {
 					</Link>
 				</div>
 				<div className="ml-auto flex items-center space-x-4">
+					{session?.user?.name && <p>{session.user.name}</p>}
 					<Link
 						className={buttonVariants({ size: "icon", variant: "outline" })}
 						href={session ? "/profile" : "/api/auth/signin"}

@@ -10,11 +10,8 @@ export const ServerEnvironment = z.object({
 	STAGE: z.string().min(1),
 	TURSO_AUTH_TOKEN: z.string().min(1),
 	TURSO_DB_URL: z.string().min(1),
-	WEB_DATA_TABLE_NAME: z.string().min(1),
 })
 
 export type ServerEnvironment = z.infer<typeof ServerEnvironment>
 
 export const serverEnvironment = ServerEnvironment.parse(process.env)
-
-console.log({ serverEnvironment })
